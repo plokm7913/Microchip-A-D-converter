@@ -179,7 +179,7 @@ int main(void)
     mInitPOT();
 
     DEBUG_Init(0);
-
+    ADC_initial();
 
     while(1)
     {
@@ -455,8 +455,6 @@ BOOL USB_ApplicationEventHandler( BYTE address, USB_EVENT event, void *data, DWO
 
 static BYTE ADCdata(void)
 {
-
-    ADC_initial();
     T3CONbits.TON = 1;
 
     while(!IFS0bits.AD1IF);

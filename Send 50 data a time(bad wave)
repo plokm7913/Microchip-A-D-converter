@@ -96,12 +96,12 @@ typedef struct __attribute__((packed))// __attribute__((packed))嚙踝蕭t嚙諄
     BYTE data[Packet_DataLength];
 } ACCESSORY_APP_PACKET;
 
-static void ADCdata(void);
+static BYTE ADCdata(void);
 static void ADC_initial(void);
-static void ADC(void);
-static void StoreData(void);
+static void  ADC(void);
 
-static BOOL isAD_Complete=FALSE;
+
+
 int ADCBUF[16];
 int BufferIndex=0;
 static DWORD TEMP;
@@ -172,7 +172,7 @@ int main(void)
     ACCESSORY_APP_PACKET* command_packet = NULL;
 
     BYTE DataIndex=0;
-    int i;
+
 
     BOOL connected_to_app = FALSE;
     BOOL need_to_disconnect_from_app = FALSE;
@@ -459,7 +459,7 @@ BOOL USB_ApplicationEventHandler( BYTE address, USB_EVENT event, void *data, DWO
 
 
 
-static void  ADCdata(void)
+static BYTE  ADCdata(void)
 {
     T3CONbits.TON = 1;
 

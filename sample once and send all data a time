@@ -1,0 +1,579 @@
+/*******************************************************************************
+
+    USB Android Accessory basic demo with accessory in host mode
+
+*******************************************************************************/
+//DOM-IGNORE-BEGIN
+/******************************************************************************
+
+FileName:        main.c
+Dependencies:    None
+Processor:       PIC24/dsPIC30/dsPIC33/PIC32MX
+Compiler:        C30/C32
+Company:         Microchip Technology, Inc.
+
+Software License Agreement
+
+The software supplied herewith by Microchip Technology Incorporated
+(the "Company") for its PICmicro(R) Microcontroller is intended and
+supplied to you, the Company?s customer, for use solely and
+exclusively on Microchip PICmicro Microcontroller products. The
+software is owned by the Company and/or its supplier, and is
+protected under applicable copyright laws. All rights are reserved.
+Any use in violation of the foregoing restrictions may subject the
+user to criminal sanctions under applicable laws, as well as to
+civil liability for the breach of the terms and conditions of this
+license.
+
+THIS SOFTWARE IS PROVIDED IN AN ?AS IS? CONDITION. NO WARRANTIES,
+WHETHER EXPRESS, IMPLIED OR STATUTORY, INCLUDING, BUT NOT LIMITED
+TO, IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+PARTICULAR PURPOSE APPLY TO THIS SOFTWARE. THE COMPANY SHALL NOT,
+IN ANY CIRCUMSTANCES, BE LIABLE FOR SPECIAL, INCIDENTAL OR
+CONSEQUENTIAL DAMAGES, FOR ANY REASON WHATSOEVER.
+
+Change History
+  Rev      Description
+  -----    ----------------------------------
+  2.9      Initial revision
+*******************************************************************************/
+
+// Include files
+
+#include "USB/usb.h"
+#include "USB/usb_host_android.h"
+#include "Compiler.h"
+#include "HardwareProfile.h"
+#include <time.h>
+#include <math.h>
+
+// If a maximum current rating hasn't been defined, then define 500mA by default
+#ifndef MAX_ALLOWED_CURRENT //嚙踝蕭嚙踝蕭MAX_ALLOWED_CURRENT嚙踝蕭嚙複被include
+    #define MAX_ALLOWED_CURRENT             (500)         // Maximum power we can supply in mA
+#endif
+
+// Configuration bits for the device.  Please refer to the device datasheet for each device
+//   to determine the correct configuration bit settings
+#if defined __C30__ || defined __XC16__
+    #if defined(__PIC24FJ256GB110__)
+        _CONFIG2(FNOSC_PRIPLL & POSCMOD_HS & PLL_96MHZ_ON & PLLDIV_DIV2) // Primary HS OSC with PLL, USBPLL /2
+        _CONFIG1(JTAGEN_OFF & FWDTEN_OFF & ICS_PGx2)   // JTAG off, watchdog timer off
+    #endif
+#endif
+
+// C30 and C32 Exception Handlers
+// If your code gets here, you either tried to read or write
+// a NULL pointer, or your application overflowed the stack
+// by having too many local variables or parameters declared.
+#if defined(__C30__) || defined __XC16__
+	void _ISR __attribute__((__no_auto_psv__)) _AddressError(void)
+	{
+        while(1){}
+	}
+	void _ISR __attribute__((__no_auto_psv__)) _StackError(void)
+	{
+        while(1){}
+	}
+#endif
+
+#define Packet_DataLength 50
+
+//Definitions of the various application commnands that can be sent
+typedef enum _ACCESSORY_DEMO_COMMANDS
+{
+    COMMAND_SET_LEDS            = 0x01,
+    COMMAND_UPDATE_PUSHBUTTONS  = 0x02,
+    COMMAND_UPDATE_POT          = 0x03,
+    COMMAND_APP_CONNECT         = 0xFE,
+    COMMAND_APP_DISCONNECT      = 0xFF
+} ACCESSORY_DEMO_COMMANDS;
+
+//Creation of the data packet that is going to be sent.  In this example
+//  there is just a command code and a one byte data.
+typedef struct __attribute__((packed))// __attribute__((packed))嚙踝蕭t嚙諄歹蕭嚙緯嚙踝蕭嚙諒佳化，嚙誕得嚙瞌嚙踝蕭嚙賡不嚙罵嚙篁嚙瞌嚙範嚙踝蕭m嚙踝蕭struct
+{
+    BYTE command;
+    BYTE data[Packet_DataLength];
+} ACCESSORY_APP_PACKET;
+
+static BYTE ADCdata(void);
+static void ADC_initial(void);
+static void  ADC(void);
+
+
+
+int ADCBUF[16];
+int BufferIndex=0;
+static DWORD TEMP;
+
+
+//local variables
+static BYTE read_buffer[64];
+static ACCESSORY_APP_PACKET outgoing_packet;
+static void* device_handle = NULL;
+static BOOL device_attached = FALSE;
+
+static char manufacturer[] = "Microchip Technology Inc.";
+static char model[] = "Basic Accessory Demo";
+static char description[] = DEMO_BOARD_NAME_STRING;
+static char version[] = "2.0";
+static char uri[] = "http://www.microchip.com/android";
+static char serial[] = "N/A";
+
+
+ANDROID_ACCESSORY_INFORMATION myDeviceInfo =
+{
+    manufacturer,
+    sizeof(manufacturer),
+    model,
+    sizeof(model),
+    description,
+    sizeof(description),
+    version,
+    sizeof(version),
+    uri,
+    sizeof(uri),
+    serial,
+    sizeof(serial)
+};
+
+
+/****************************************************************************
+  Function:
+    int main(void)
+
+  Summary:
+    main function
+
+  Description:
+    main function
+
+  Precondition:
+    None
+
+  Parameters:
+    None
+
+  Return Values:
+    int - exit code for main function
+
+  Remarks:
+    None
+  ***************************************************************************/
+int main(void)
+{
+    DWORD size = 0;
+    BOOL responseNeeded;
+    BOOL buttonsNeedUpdate = FALSE;
+    BOOL DataNeedsUpdate = FALSE;
+    BOOL readyToRead = TRUE;
+    BOOL writeInProgress = FALSE;
+    BYTE errorCode;
+    ACCESSORY_APP_PACKET* command_packet = NULL;
+
+    BYTE DataIndex=0;
+    BOOL StoreData=FALSE;
+    BYTE Data_Buffer[5000];
+    int i;
+    int j=0;
+
+    BOOL connected_to_app = FALSE;
+    BOOL need_to_disconnect_from_app = FALSE;
+
+
+    USBInitialize(0);
+    AndroidAppStart(&myDeviceInfo);
+
+    responseNeeded = FALSE;
+    mInitPOT();
+
+    DEBUG_Init(0);
+
+    ADC_initial();
+
+    while(1)
+    {
+        //Keep the USB stack running
+        USBTasks();
+
+        //If the device isn't attached yet,
+        if(device_attached == FALSE)
+        {
+            buttonsNeedUpdate = TRUE;
+            DataNeedsUpdate = TRUE;
+            need_to_disconnect_from_app = FALSE;
+            connected_to_app = FALSE;
+            size = 0;
+
+            //Continue to the top of the while loop to start the check over again.
+            continue;
+        }
+
+        //If the accessory is ready, then this is where we run all of the demo code
+
+        if(readyToRead == TRUE)
+        {
+            errorCode = AndroidAppRead(device_handle, (BYTE*)&read_buffer, (DWORD)sizeof(read_buffer));
+            //If the device is attached, then lets wait for a command from the application
+            if( errorCode != USB_SUCCESS)
+            {
+                //Error
+                DEBUG_PrintString("Error trying to start read");
+            }
+            else
+            {
+                readyToRead = FALSE;
+            }
+        }
+
+        size = 0;
+
+        if(AndroidAppIsReadComplete(device_handle, &errorCode, &size) == TRUE)
+        {
+            //We've received a command over the USB from the Android device.
+            if(errorCode == USB_SUCCESS)
+            {
+                //Maybe process the data here.  Maybe process it somewhere else.
+                command_packet = (ACCESSORY_APP_PACKET*)&read_buffer[0];
+            }
+            else
+            {
+                //Error
+                DEBUG_PrintString("Error trying to complete read request");
+            }
+        }
+
+
+        while(size > 0)
+        {
+            if(connected_to_app == FALSE)
+            {
+                if(command_packet->command == COMMAND_APP_CONNECT)
+                {
+                    connected_to_app = TRUE;
+                    need_to_disconnect_from_app = FALSE;
+                }
+            }
+            else
+            {
+                switch(command_packet->command)
+                {
+
+                    case COMMAND_APP_DISCONNECT:
+                        need_to_disconnect_from_app = TRUE;
+                        break;
+
+                    default:
+                        //Error, unknown command
+                        DEBUG_PrintString("Error: unknown command received");
+                        break;
+                }
+            }
+            //All commands in this example are two bytes, so remove that from the queue
+            size -= Packet_DataLength+1;
+            //And move the pointer to the next packet (this works because
+            //  all command packets are 2 bytes.  If variable packet size
+            //  then need to handle moving the pointer by the size of the
+            //  command type that arrived.
+            command_packet++;
+
+            if(need_to_disconnect_from_app == TRUE)
+            {
+                break;
+            }
+        }
+
+        if(size == 0)
+        {
+            readyToRead = TRUE;
+        }
+
+        //Get the current potentiometer setting
+
+       if(StoreData == FALSE)
+       {
+           Data_Buffer[DataIndex] = ADCdata();
+           DataIndex++;
+           if(DataIndex>=250)
+           {
+            DataIndex=0;
+            StoreData=TRUE;
+           }
+       }
+      
+       if(StoreData==TRUE && j<5)
+       {
+           for(i=0;i<50;i++)
+               outgoing_packet.data[i]= Data_Buffer[i+j*50];
+           DataNeedsUpdate=TRUE;
+           j++;
+       }
+        /*
+       outgoing_packet.data[DataIndex] = ADCdata();
+       DataIndex++;
+       if(DataIndex>=Packet_DataLength)
+       {
+           DataIndex=0;
+           DataNeedsUpdate = TRUE;
+       }
+       */
+
+        //If there is a write already in progress, we need to check its status
+        if( writeInProgress == TRUE )
+        {
+            if(AndroidAppIsWriteComplete(device_handle, &errorCode, &size) == TRUE)
+            {
+                writeInProgress = FALSE;
+                if(need_to_disconnect_from_app == TRUE)
+                {
+                    connected_to_app = FALSE;
+                    need_to_disconnect_from_app = FALSE;
+                }
+
+                if(errorCode != USB_SUCCESS)
+                {
+                    //Error
+                    DEBUG_PrintString("Error trying to complete write");
+                }
+            }
+        }
+
+        if((need_to_disconnect_from_app == TRUE) && (writeInProgress == FALSE))
+        {
+            outgoing_packet.command = COMMAND_APP_DISCONNECT;
+            //outgoing_packet.data = 0;
+            writeInProgress = TRUE;
+
+            errorCode = AndroidAppWrite(device_handle,(BYTE*)&outgoing_packet, Packet_DataLength+1);
+            if( errorCode != USB_SUCCESS )
+            {
+                DEBUG_PrintString("Error trying to send button update");
+            }
+        }
+
+        if(connected_to_app == FALSE)
+        {
+            //If the app hasn't told us to start sending data, let's not do anything else.
+            //continue;
+        }
+
+        //If we need up update the pot status on the Android device and we aren't
+        //  already busy in a write, then we can send the new pot data.
+        if((DataNeedsUpdate == TRUE) && (writeInProgress == FALSE))
+        {
+            outgoing_packet.command = COMMAND_UPDATE_POT;
+            //outgoing_packet.data = potPercentage;
+
+            errorCode = AndroidAppWrite(device_handle,(BYTE*)&outgoing_packet, Packet_DataLength+1);
+            if( errorCode != USB_SUCCESS )
+            {
+                DEBUG_PrintString("Error trying to send pot update");
+            }
+
+            DataNeedsUpdate = FALSE;
+            writeInProgress = TRUE;
+        }
+    } //while(1) main loop
+}
+
+
+/****************************************************************************
+  Function:
+    BOOL USB_ApplicationDataEventHandler( BYTE address, USB_EVENT event, void *data, DWORD size )
+
+  Summary:
+    Handles USB data application events
+
+  Description:
+    Handles USB data application events
+
+  Precondition:
+    None
+
+  Parameters:
+    BYTE address - address of the device causing the event
+    USB_EVENT event - the event that has occurred
+    void* data - data associated with the event
+    DWORD size - the size of the data in the data field
+
+  Return Values:
+    BOOL - Return TRUE of the event was processed.  Return FALSE if the event
+           wasn't handled.
+
+  Remarks:
+    None
+  ***************************************************************************/
+BOOL USB_ApplicationDataEventHandler( BYTE address, USB_EVENT event, void *data, DWORD size )
+{
+    return FALSE;
+}
+
+
+/****************************************************************************
+  Function:
+    BOOL USB_ApplicationEventHandler( BYTE address, USB_EVENT event, void *data, DWORD size )
+
+  Summary:
+    Handles USB application events
+
+  Description:
+    Handles USB application events
+
+  Precondition:
+    None
+
+  Parameters:
+    BYTE address - address of the device causing the event
+    USB_EVENT event - the event that has occurred
+    void* data - data associated with the event
+    DWORD size - the size of the data in the data field
+
+  Return Values:
+    BOOL - Return TRUE of the event was processed.  Return FALSE if the event
+           wasn't handled.
+
+  Remarks:
+    None
+  ***************************************************************************/
+BOOL USB_ApplicationEventHandler( BYTE address, USB_EVENT event, void *data, DWORD size )
+{
+    switch( (INT)event )
+    {
+        case EVENT_VBUS_REQUEST_POWER:
+            // The data pointer points to a byte that represents the amount of power
+            // requested in mA, divided by two.  If the device wants too much power,
+            // we reject it.
+            if (((USB_VBUS_POWER_EVENT_DATA*)data)->current <= (MAX_ALLOWED_CURRENT / 2))
+            {
+                return TRUE;
+            }
+            else
+            {
+                DEBUG_PrintString( "\r\n***** USB Error - device requires too much current *****\r\n" );
+            }
+            break;
+
+        case EVENT_VBUS_RELEASE_POWER:
+        case EVENT_HUB_ATTACH:
+        case EVENT_UNSUPPORTED_DEVICE:
+        case EVENT_CANNOT_ENUMERATE:
+        case EVENT_CLIENT_INIT_ERROR:
+        case EVENT_OUT_OF_MEMORY:
+        case EVENT_UNSPECIFIED_ERROR:   // This should never be generated.
+        case EVENT_DETACH:                   // USB cable has been detached (data: BYTE, address of device)
+        case EVENT_ANDROID_DETACH:
+            device_attached = FALSE;
+            return TRUE;
+            break;
+
+        // Android Specific events
+        case EVENT_ANDROID_ATTACH:
+            device_attached = TRUE;
+            device_handle = data;
+            return TRUE;
+
+        default :
+            break;
+    }
+    return FALSE;
+}
+
+
+
+static BYTE  ADCdata(void)
+{
+    T3CONbits.TON = 1;
+
+    while(!IFS0bits.AD1IF);
+    IFS0bits.AD1IF=0;
+    while(!AD1CON1bits.DONE);
+    AD1CON1bits.DONE=0;
+
+    TEMP= (DWORD)ADC1BUF0;
+    TEMP = TEMP * 250;
+    TEMP = TEMP/1023;
+    TEMP=(BYTE)TEMP;
+
+    return (BYTE)TEMP;
+
+
+}
+
+
+
+static void ADC_initial(void)
+{
+    //set AD1PCFG register
+    AD1PCFGLbits.PCFG8=0;  // configure AN8  in Analog mode
+
+    //set AD1CON1 register
+    AD1CON1bits.ADON=1; //ADC is disable
+    AD1CON1bits.ADSIDL=0;  //ADC will not shut down in hte IDLE mode
+    AD1CON1bits.FORM0=0;  //Output format is integer
+    AD1CON1bits.FORM1=0;
+    AD1CON1bits.SSRC0=0;
+    AD1CON1bits.SSRC1=1;
+    AD1CON1bits.SSRC2=0;
+    //use Timer3  to count the sampling time
+    AD1CON1bits.ASAM=1;    //automatically sampling
+
+    //set AD1CON2 register
+    AD1CON2bits.VCFG=0x0;  //Reference voltage is Vdd&Vss
+    AD1CON2bits.CSCNA=0;   //Trigger is from internal clock and automally scan the input in MUX A
+    AD1CON2bits.ALTS=0;    // Input only choose the MUX A.
+    AD1CON2bits.SMPI=0x0;  //Every 1 convertion will interrupt
+    AD1CON2bits.BUFM=0;    //data sequentially store in BUF0 to BUFF
+
+    //set AD1CON3 register
+    AD1CON3bits.SAMC=0x00;       //Samping time when auto
+    AD1CON3bits.ADRC=0;     //use the system oscillator
+    AD1CON3bits.ADCS=0x00;  //Tad=(15+1)*0.5*Tcy=25/12 us
+    //AD1CON3bits.ADCS=0x04;
+
+    //set AD1CHS register
+    AD1CHSbits.CH0NA = 1;  //set  AN8 as the input pin for mux A
+    AD1CHSbits.CH0SA=0x8;
+
+    //set Timer3
+    //PR3 = 0x0032;
+    PR3 = 0x00c8; //PR3=200,Timer3=200*250ns=50us
+    //PR3 = 0x07d0;
+    //PR3 = 0x1f40;
+    IPC2bits.T3IP = 0x01;
+    IEC0bits.T3IE = 0;
+
+}
+
+static void ADC(void)
+{
+    /* The following code example will enable Timer1 interrupts, load the Timer1
+    Period register and start Timer1.
+    When a Timer1 period match interrupt occurs, the interrupt service
+    routine must clear the Timer1 interrupt status flag in software.
+    */
+
+    //T3CON = 0x00; //Stops the Timer3 and reset control reg.
+    //TMR3 = 0x00; //Clear contents of the timer register
+    PR3 = 0x0064; //Load the Period register with the value 0xFFFF
+    //PR1 = 0x20;
+    IPC2bits.T3IP = 0x01; //Setup Timer3 interrupt for desired priority level
+    // (This example assigns level 1 priority)
+    IFS0bits.T3IF = 0; //Clear the Timer3 interrupt status flag
+    IEC0bits.T3IE = 0; //Enable Timer3 interrupts
+
+    AD1CON1bits.ADON=1;
+    T3CONbits.TON = 1; //Start Timer3 with prescaler settings at 1:1 and
+    //clock source set to the internal instruction cycle
+
+}
+
+ /* Example code for Timer1 ISR*/
+void __attribute__((__interrupt__, __shadow__)) _T3Interrupt(void)
+{
+    /* Interrupt Service Routine code goes here */
+    //T3CON = 0x00;
+    while(!AD1CON1bits.DONE);
+    TEMP= (DWORD)ADC1BUF0;
+    IFS0bits.T3IF = 0; //Reset Timer1 interrupt flag and Return from ISR
+}
+

@@ -171,11 +171,13 @@ int main(void)
     BYTE errorCode;
     ACCESSORY_APP_PACKET* command_packet = NULL;
 
-    BYTE DataIndex=0;
+    int DataIndex=0;
     BOOL StoreData=FALSE;
-    BYTE Data_Buffer[5000];
+    BYTE Data_Buffer[10000];
+   
     int i;
     int j=0;
+    int k=0;
 
     BOOL connected_to_app = FALSE;
     BOOL need_to_disconnect_from_app = FALSE;
@@ -294,14 +296,14 @@ int main(void)
        {
            Data_Buffer[DataIndex] = ADCdata();
            DataIndex++;
-           if(DataIndex>=250)
+           if(DataIndex>=10000)
            {
             DataIndex=0;
             StoreData=TRUE;
            }
        }
-      
-       if(StoreData==TRUE && j<5)
+
+       if( DataNeedsUpdate==FALSE && StoreData==TRUE && j<200)
        {
            for(i=0;i<50;i++)
                outgoing_packet.data[i]= Data_Buffer[i+j*50];
@@ -354,7 +356,8 @@ int main(void)
         if(connected_to_app == FALSE)
         {
             //If the app hasn't told us to start sending data, let's not do anything else.
-            //continue;
+            k++;
+            continue;
         }
 
         //If we need up update the pot status on the Android device and we aren't
@@ -536,7 +539,7 @@ static void ADC_initial(void)
 
     //set Timer3
     //PR3 = 0x0032;
-    PR3 = 0x00c8; //PR3=200,Timer3=200*250ns=50us
+    PR3 = 0x000F; //PR3=200,Timer3=200*250ns=50us
     //PR3 = 0x07d0;
     //PR3 = 0x1f40;
     IPC2bits.T3IP = 0x01;

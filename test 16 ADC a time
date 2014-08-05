@@ -293,7 +293,7 @@ int main(void)
            for(i=0;i<16;i++)
            {
                TEMP= (DWORD)ADCBUF[i];
-               TEMP = TEMP * 100;
+               TEMP = TEMP * 250;
                TEMP = TEMP/1023;
                TEMP=(BYTE)TEMP;
                outgoing_packet.data[DataIndex]=TEMP;

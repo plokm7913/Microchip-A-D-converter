@@ -286,8 +286,8 @@ int main(void)
         }
 
         //Get the current potentiometer setting
-        
-       
+
+
        outgoing_packet.data[DataIndex] = ADCdata();
        DataIndex++;
        if(DataIndex>=Packet_DataLength)
@@ -500,7 +500,7 @@ static void ADC_initial(void)
     AD1CON2bits.VCFG=0x0;  //Reference voltage is Vdd&Vss
     AD1CON2bits.CSCNA=0;   //Trigger is from internal clock and automally scan the input in MUX A
     AD1CON2bits.ALTS=0;    // Input only choose the MUX A.
-    AD1CON2bits.SMPI=0xF;  //Every 1 convertion will interrupt
+    AD1CON2bits.SMPI=0x0;  //Every 1 convertion will interrupt
     AD1CON2bits.BUFM=0;    //data sequentially store in BUF0 to BUFF
 
     //set AD1CON3 register
@@ -510,7 +510,8 @@ static void ADC_initial(void)
     //AD1CON3bits.ADCS=0x04;
 
     //set AD1CHS register
-    AD1CHS = 0x8;  //set  AN8 as the input pin for mux A
+    AD1CHSbits.CH0NA = 1;  //set  AN8 as the input pin for mux A
+    AD1CHSbits.CH0SA=0x8;
 
     //set Timer3
     //PR3 = 0x0032;
